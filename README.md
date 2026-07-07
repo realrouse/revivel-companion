@@ -1,5 +1,7 @@
 # ReviveL Companion
 
+**📥 Download the latest release:** [https://revivel.app/#downloads](https://revivel.app/#downloads)
+
 **ReviveL Daemon Bundle** — a small, reliable desktop companion that runs `lbrynet` (SPV wallet mode) so the ReviveL browser extension can unlock full LBC wallet functionality.
 
 RPC endpoint (for the extension and tools): **http://127.0.0.1:5279**
