@@ -1,0 +1,36 @@
+[package]
+name = "revivel-companion"
+version = "0.1.2"
+description = "ReviveL Companion - lbrynet daemon launcher and SPV wallet manager for the ReviveL browser extension"
+authors = ["ReviveL"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "revivel_companion_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+zip = "2"
+tokio = { version = "1", features = ["process", "time", "sync", "macros", "io-util", "rt", "fs"] }
+thiserror = "1"
+once_cell = "1"
+dirs = "5"
+auto-launch = "0.5"
+rand = "0.8"
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
+urlencoding = "2.1.3"
+

@@ -1,0 +1,149 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #eaeaea;
+  background-color: #181818;
+}
+
+.container {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.app-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+header h1 {
+  margin: 0 0 2px;
+  font-size: 26px;
+}
+
+.subtitle {
+  margin: 0;
+  color: #9aa0a6;
+  font-size: 13px;
+}
+
+h2 {
+  font-size: 16px;
+  margin: 16px 0 8px;
+  color: #c5cace;
+  border-bottom: 1px solid #333;
+  padding-bottom: 4px;
+}
+
+.status-panel, .info, .settings {
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.status {
+  font-family: ui-monospace, monospace;
+  background: #111;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.status-row {
+  display: flex;
+  margin: 4px 0;
+}
+
+.label {
+  width: 110px;
+  color: #8a8f96;
+}
+
+.value {
+  color: #e0e0e0;
+}
+
+.value.running { color: #4ade80; }
+.value.stopped { color: #f87171; }
+.value.syncing { color: #facc15; }
+
+.actions button {
+  margin-right: 8px;
+  margin-top: 4px;
+}
+
+button {
+  background: #2a2a2a;
+  color: #eaeaea;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #333;
+  border-color: #666;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.info code {
+  background: #111;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.settings label {
+  display: block;
+  margin: 8px 0;
+  cursor: pointer;
+}
+
+.small {
+  font-size: 12px;
+  color: #8a8f96;
+}
+
+.ext-status {
+  margin: 6px 0;
+  padding: 4px 8px;
+  background: #1f1f1f;
+  border-radius: 4px;
+}
+
+.warning {
+  color: #ffcc66;
+}
+
+.warning button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+footer {
+  text-align: center;
+  margin-top: 12px;
+}
+
+footer a {
+  color: #60a5fa;
+}

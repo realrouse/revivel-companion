@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReviveL Companion</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+
+  <body>
+    <main class="container">
+      <header class="app-header">
+        <img src="/assets/logo.png" alt="ReviveL Logo" class="app-logo" />
+        <div>
+          <h1>ReviveL Companion</h1>
+          <p class="subtitle">lbrynet + SPV Wallet for full ReviveL power</p>
+        </div>
+      </header>
+
+      <section class="status-panel">
+        <h2>Daemon Status</h2>
+        <div id="status" class="status">
+          <div class="status-row"><span class="label">Process:</span> <span id="proc-status" class="value">Checking...</span></div>
+          <div class="status-row"><span class="label">RPC:</span> <span id="rpc-status" class="value">—</span></div>
+          <div class="status-row"><span class="label">Wallet:</span> <span id="wallet-status" class="value">—</span></div>
+          <div class="status-row"><span class="label">SPV Server:</span> <span id="spv-status" class="value">—</span></div>
+          <div class="status-row"><span class="label">Blocks:</span> <span id="blocks-status" class="value">—</span></div>
+        </div>
+        <div class="actions">
+          <button id="btn-start">Start Daemon</button>
+          <button id="btn-stop">Stop Daemon</button>
+          <button id="btn-restart">Restart</button>
+          <button id="btn-refresh">Refresh Status</button>
+        </div>
+        <div id="action-indicator" class="small" style="margin-top: 6px; min-height: 16px; color: #888;"></div>
+
+        <!-- Conflict detection UI for already-running external daemons -->
+        <div id="daemon-conflict" class="warning" style="display:none; margin-top: 10px; padding: 10px; background:#332200; border:1px solid #664400; border-radius:4px; font-size:13px;">
+          <strong>⚠️ Another lbrynet daemon is already running on port 5279</strong> (not managed by this Companion).
+          <div style="margin-top:6px;">
+            <button id="btn-force-kill" style="margin-right:4px;">Force kill existing</button>
+            <button id="btn-start-anyway" style="margin-right:4px;">Start anyway</button>
+            <button id="btn-quit">Quit</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="info">
+        <h2>Connection for ReviveL Extension</h2>
+        <p>RPC Endpoint: <code>http://127.0.0.1:5279</code></p>
+        <div id="ext-compat" class="ext-status small"></div>
+        <p class="small">The ReviveL browser extension auto-detects a running daemon on this address for full wallet features (publish, pay, tip, balance). It uses specific Origin + RPC auth for security.</p>
+        <button id="btn-copy-launch">Copy launch command</button>
+      </section>
+
+      <section class="settings">
+        <h2>Settings</h2>
+        <label>
+          <input type="checkbox" id="auto-start" /> Start daemon automatically on launch
+        </label>
+        <label>
+          <input type="checkbox" id="auto-launch-os" /> Launch companion with OS (minimized to tray)
+        </label>
+        <label>
+          <input type="checkbox" id="allow-extension" /> Allow ReviveL browser extension access (adds --allowed-origin "*")
+        </label>
+        <div>
+          <label class="small">ReviveL Extension ID (for lbry:// forwarding; configurable, may change after store publish):</label><br/>
+          <input type="text" id="extension-id" value="bgehhgganagafhmkbpgiockhfpgbhebk" style="width: 100%; font-family: monospace; font-size: 12px;" />
+        </div>
+        <div>
+          <label class="small">SPV Servers (one per line, for failover on disconnects):</label><br/>
+          <textarea id="spv-servers" rows="3" style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>
+        </div>
+        <div>
+          <button id="btn-download">Download / Update lbrynet binary</button>
+          <span id="bin-info" class="small"></span>
+          <div id="recovery-history" class="small" style="margin-top:4px; color:#888;"></div>
+        </div>
+        <div>
+          <button id="btn-open-data">Open Data Folder</button>
+          <button id="btn-open-logs">Open Logs</button>
+        </div>
+        <div>
+          <button id="btn-register-lbry">Register lbry:// + Native Messaging host</button>
+          <span id="lbry-register-status" class="small"></span>
+        </div>
+        <p class="small">After registering, typing <code>lbry://...</code> in Chrome/Brave address bar should open the ReviveL player (requires the extension to be installed).</p>
+      </section>
+
+      <footer>
+        <p class="small">Using lbrynet v0.113.0 • SPV mode (no lbcd required) • <a href="#" id="link-docs">Docs</a></p>
+      </footer>
+    </main>
+  </body>
+</html>

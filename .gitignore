@@ -1,0 +1,56 @@
+# === Rust / Tauri / Cargo ===
+src-tauri/target/
+target/
+**/*.rs.bk
+*.pdb
+
+# === Node / Frontend ===
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm
+*.log
+
+# === Built bundles / installers (don't commit these — release via GitHub Releases) ===
+*.AppImage
+*.deb
+*.rpm
+*.exe
+*.msi
+*.dmg
+src-tauri/target/release/bundle/
+
+# === Downloaded lbrynet binaries (fetched at runtime) ===
+src-tauri/lbrynet-bin/
+lbrynet
+lbrynet.exe
+lbrynet-*
+
+# === Logs & runtime data ===
+logs/
+*.log
+lbrynet-data/
+lbryum/
+
+# === Editor / IDE ===
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Misc ===
+.env
+.env.local
+*.zip
+*.tar.gz
+Cargo.lock.bk
