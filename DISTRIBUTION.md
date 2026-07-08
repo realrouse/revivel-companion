@@ -70,7 +70,12 @@ Make sure data dir is **not** auto-deleted (preserve user wallet).
 - In production:
   - Pin exact SHA256 of the expected lbrynet zip/binary and verify after download.
   - Or bundle a known-good binary and only allow updates from signed sources.
-- lbrynet itself has no network auth on localhost — this is by design and acceptable because the companion controls the process.
+- lbrynet (v0.113) does not enforce HTTP Basic Auth checks on localhost connections even when rpcuser/rpcpass are set. The Companion therefore:
+  - Always generates and passes random credentials (for internal use + future-proofing).
+  - Starts lbrynet with a **strict `allowed_origin`** set to only the ReviveL extension's chrome-extension ID (never "*").
+  - This blocks direct calls from arbitrary websites (they will see Origin mismatch / 403).
+  - The extension fetches credentials via Native Messaging and sends the Authorization header.
+- Local native malware can still reach localhost ports, but the web-based drain vector from any site is mitigated by the origin restriction.
 
 ## Current Version Pin
 - lbrynet: v0.113.0 (last official from lbryio/lbry-sdk)

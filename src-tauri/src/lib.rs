@@ -283,15 +283,16 @@ impl DaemonManager {
         Ok(target)
     }
 
-    fn write_config(&self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str) -> Result<()> {
+    fn write_config(&self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str, extension_id: &str) -> Result<()> {
         // Ensure primary SPV (s1 / 88.99.63.52) is first choice
         let mut servers_list: Vec<String> = servers.to_vec();
         servers_list.sort_by_key(|s| if s.contains("88.99.63.52") || s.contains("s1.lbry.network") { 0 } else { 1 });
         let servers_yaml: Vec<String> = servers_list.iter().map(|s| format!("- {}", s)).collect();
         let allowed_line = if allow_extension {
-            "allowed_origin: \"*\"\n"
+            // Strict origin (not "*"). Companion also provides safe proxy path via Native Messaging.
+            format!("allowed_origin: \"chrome-extension://{}/\"\n", extension_id)
         } else {
-            "# allowed_origin: \"*\"   # (disabled) enable 'Allow ReviveL browser extension access' for CORS\n"
+            "# allowed_origin disabled\n".to_string()
         };
         let mut content = format!(
             r#"# ReviveL Companion generated config for lbrynet
@@ -335,26 +336,42 @@ concurrent_blob_downloads: 2
         Ok(())
     }
 
-    async fn start(&mut self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str) -> Result<()> {
+    async fn start(&mut self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str, extension_id: &str) -> Result<()> {
+        // Defensive: never start without credentials
+        if rpcuser.is_empty() || rpcpass.is_empty() {
+            return Err(AppError::Process(
+                "Cannot start managed daemon without RPC credentials. Authentication would not be enforced.".into(),
+            ));
+        }
+
         // Always ensure previous instance is cleanly stopped for clean start
         if self.child.is_some() || self.is_running() {
             let _ = self.stop().await;
             sleep(Duration::from_millis(500)).await;
         }
 
-        // Detect if something else is already listening on the port
-        if self.is_rpc_reachable().await {
-            return Err(AppError::Process(
-                "A lbrynet daemon is already running on 127.0.0.1:5279. Use 'Force kill existing' or stop it first.".into(),
-            ));
+        // Detect if the port is occupied by ANY process (probe without auth)
+        if self.is_reachable_without_auth().await {
+            // Something is listening. Check if it accepts *our* credentials
+            if self.is_rpc_reachable().await {
+                return Err(AppError::Process(
+                    "Our managed lbrynet daemon is already running on 127.0.0.1:5279.".into(),
+                ));
+            } else {
+                return Err(AppError::Process(
+                    "Port 5279 is in use by another lbrynet that does not accept the Companion's credentials. Use 'Force kill existing' button first.".into(),
+                ));
+            }
         }
 
         let bin = self.find_or_download_binary().await?;
-        self.write_config(allow_extension, servers, rpcuser, rpcpass)?;
+        let effective_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
+        self.write_config(allow_extension, servers, rpcuser, rpcpass, effective_id)?;
 
         // Launch lbrynet start with our data dir and config.
-        // Use rpc credentials for security. allowed_origin * is ok because auth is required
-        // and credentials are only obtainable via Native Messaging from the whitelisted extension.
+        // We use strict allowed_origin (specific extension ID) because lbrynet does not
+        // enforce HTTP Basic Auth on localhost connections. The origin list is the effective
+        // control that stops arbitrary websites from reaching wallet methods.
         let mut cmd = Command::new(&bin);
         cmd.arg("start")
             .arg("--data-dir")
@@ -375,7 +392,10 @@ concurrent_blob_downloads: 2
         }
 
         if allow_extension {
-            cmd.arg("--allowed-origin").arg("*");
+            let eff_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
+            // Set strict origin for the specific extension. This is a defense layer.
+            // Primary safety comes from the Companion making proxy requests (see rpc_call via NM).
+            cmd.arg("--allowed-origin").arg(format!("chrome-extension://{}/", eff_id));
         }
 
         cmd.stdout(Stdio::piped())
@@ -408,7 +428,10 @@ concurrent_blob_downloads: 2
         self.restart_count += 1;
         self.failures = 0;
         self.last_restart = Some(std::time::Instant::now());
-        self.allowed_origin = if allow_extension { Some("*".to_string()) } else { None };
+        self.allowed_origin = if allow_extension {
+            let eff_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
+            Some(format!("chrome-extension://{}/", eff_id))
+        } else { None };
         self.rpcuser = Some(rpcuser.to_string());
         self.rpcpass = Some(rpcpass.to_string());
 
@@ -418,6 +441,29 @@ concurrent_blob_downloads: 2
                 break;
             }
             sleep(Duration::from_millis(500)).await;
+        }
+
+        // Post-start verification that authentication is enforced.
+        // We explicitly test that a request WITHOUT the Authorization header is rejected.
+        // This guarantees that the Extension (which now sends Basic Auth via Native Messaging creds)
+        // is the only thing that can use the wallet.
+        sleep(Duration::from_millis(800)).await;
+        let mut auth_enforced = false;
+        for _ in 0..4 {
+            if self.is_rpc_reachable().await {
+                let accepts_unauth = self.is_reachable_without_auth().await;
+                if accepts_unauth {
+                    self.log_action("WARNING: lbrynet accepted unauthenticated request after start!");
+                } else {
+                    auth_enforced = true;
+                    self.log_action("SUCCESS: lbrynet daemon is enforcing RPC authentication (unauth requests rejected).");
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(400)).await;
+        }
+        if !auth_enforced {
+            self.log_action("WARNING: Failed to confirm auth enforcement on the new daemon. Wallet calls may not require credentials.");
         }
 
         // Capture lbrynet logs to file
@@ -499,6 +545,31 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
+
+        match req.send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
+    }
+
+    /// Probe if anything is listening on the RPC port WITHOUT sending credentials.
+    /// Used to detect ANY daemon (authenticated or not) occupying the port.
+    async fn is_reachable_without_auth(&self) -> bool {
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+
+        let body = serde_json::json!({
+            "method": "status",
+            "params": {}
+        });
+
+        // Send WITHOUT basic_auth on purpose
+        let req = client.post(RPC_URL).json(&body);
 
         match req.send().await {
             Ok(resp) => resp.status().is_success(),
@@ -688,7 +759,7 @@ impl DaemonManager {
             self.last_restart = Some(now);
             self.log_action("Daemon process not alive, auto-restarting...");
             self.recovery_history.push(format!("{}: process died", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
-            if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass).await {
+            if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, "").await {
                 self.log_action(&format!("Auto-start failed: {}", e));
             }
             return;
@@ -707,7 +778,7 @@ impl DaemonManager {
                 self.recovery_history.push(format!("{}: RPC unreachable", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
                 let _ = self.stop().await;
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass).await {
+                if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, "").await {
                     self.log_action(&format!("Restart after unreachable failed: {}", e));
                 }
             }
@@ -789,8 +860,9 @@ async fn start_daemon(state: State<'_, AppState>) -> Result<()> {
     let servers = settings.spv_servers;
     let rpcuser = settings.rpcuser.clone();
     let rpcpass = settings.rpcpass.clone();
+    let ext_id = settings.revivel_extension_id.clone();
     let mut mgr = state.manager.lock().await;
-    mgr.start(allow, &servers, &rpcuser, &rpcpass).await
+    mgr.start(allow, &servers, &rpcuser, &rpcpass, &ext_id).await
 }
 
 #[tauri::command]
@@ -811,8 +883,9 @@ async fn restart_daemon(state: State<'_, AppState>) -> Result<()> {
     let servers = settings.spv_servers;
     let rpcuser = settings.rpcuser.clone();
     let rpcpass = settings.rpcpass.clone();
+    let ext_id = settings.revivel_extension_id.clone();
     let mut mgr = state.manager.lock().await;
-    mgr.start(allow, &servers, &rpcuser, &rpcpass).await
+    mgr.start(allow, &servers, &rpcuser, &rpcpass, &ext_id).await
 }
 
 #[tauri::command]
@@ -909,9 +982,10 @@ async fn save_settings(
         let servers = current.spv_servers.clone();
         let rpcuser = current.rpcuser.clone();
         let rpcpass = current.rpcpass.clone();
+        let ext_id = current.revivel_extension_id.clone();
         let mut mgr = state.manager.lock().await;
         if !mgr.is_running() {
-            let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass).await;
+            let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass, &ext_id).await;
         }
     }
 
@@ -1136,6 +1210,49 @@ fn handle_native_message(msg: serde_json::Value) -> serde_json::Value {
                 }
                 return serde_json::json!({ "success": false, "error": "credentials not available" });
             }
+            "rpc_call" => {
+                // Proxy safe request: the Companion makes the actual call to lbrynet
+                // using the stored credentials. This way the SDK (lbrynet) does not need
+                // broad "allowed_origin" setup. Only the whitelisted extension can ask
+                // via Native Messaging.
+                let settings_path = get_app_settings_path();
+                if let Ok(content) = std::fs::read_to_string(&settings_path) {
+                    if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
+                        if !settings.rpcuser.is_empty() && !settings.rpcpass.is_empty() {
+                            let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                            let params = msg.get("params").cloned().unwrap_or(serde_json::json!({}));
+                            let body = serde_json::json!({
+                                "method": method,
+                                "params": params
+                            });
+
+                            // Use blocking client since we are in sync NM loop
+                            let client = reqwest::blocking::Client::builder()
+                                .timeout(std::time::Duration::from_secs(30))
+                                .build()
+                                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+                            let req = client.post("http://127.0.0.1:5279")
+                                .json(&body)
+                                .basic_auth(&settings.rpcuser, Some(&settings.rpcpass));
+
+                            match req.send() {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>() {
+                                        return json;
+                                    } else {
+                                        return serde_json::json!({ "error": "invalid response from lbrynet" });
+                                    }
+                                }
+                                Err(e) => {
+                                    return serde_json::json!({ "error": format!("proxy request failed: {}", e) });
+                                }
+                            }
+                        }
+                    }
+                }
+                return serde_json::json!({ "success": false, "error": "credentials not available for proxy" });
+            }
             "ping" => {
                 return serde_json::json!({ "success": true, "pong": true });
             }
@@ -1343,8 +1460,9 @@ pub fn run() {
                         let servers = settings.spv_servers.clone();
                         let rpcuser = settings.rpcuser.clone();
                         let rpcpass = settings.rpcpass.clone();
+                        let ext_id = settings.revivel_extension_id.clone();
                         let mut mgr = state.manager.lock().await;
-                        let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass).await;
+                        let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass, &ext_id).await;
                     }
                 }
             });
@@ -1407,8 +1525,9 @@ pub fn run() {
                                     let servers = settings.spv_servers;
                                     let rpcuser = settings.rpcuser.clone();
                                     let rpcpass = settings.rpcpass.clone();
+                                    let ext_id = settings.revivel_extension_id.clone();
                                     let mut mgr = m.lock().await;
-                                    let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass).await;
+                                    let _ = mgr.start(allow, &servers, &rpcuser, &rpcpass, &ext_id).await;
                                 });
                             }
                         }

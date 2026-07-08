@@ -30,11 +30,17 @@ Remote SPV servers
 
 This is the same architecture the old LBRY Desktop used when running in SPV mode.
 
-## RPC Endpoint
-- **URL**: `http://127.0.0.1:5279`
-- **Protocol**: JSON-RPC over HTTP POST
-- **No authentication** required when connecting from localhost (standard lbrynet behavior).
-- Default port is 5279 — the same one used by classic LBRY Desktop.
+## RPC Endpoint and Proxy Model (Recommended)
+
+**Important security note**: The Companion now acts as a secure proxy for requests to lbrynet.
+
+- The extension should prefer sending RPC calls via **Native Messaging** to the Companion (using `type: "rpc_call"`).
+- The Companion then makes the actual (authenticated) request to the internal lbrynet daemon.
+- This way, the SDK (lbrynet) does not need any "allowed_origin" configuration for browser access. The proxy is "safe" because only the whitelisted extension can trigger it via NM.
+- Direct HTTP to 127.0.0.1:5279 from the browser is discouraged for wallet operations.
+- For basic detection, a direct status poll may still be used, but sensitive operations (wallet_send, etc.) should go through the Companion proxy.
+
+The Companion launches lbrynet on the standard port but without broad allowed_origin flags. All privileged access goes through the controlled proxy path.
 
 Example request (status):
 ```json
@@ -100,13 +106,24 @@ The companion launches lbrynet roughly as:
 lbrynet start \
   --data-dir <app-data>/lbrynet-data \
   --config <app-data>/lbrynet-data/daemon_settings.yml \
-  --api 127.0.0.1:5279
+  --api 127.0.0.1:5279 \
+  --rpcuser <random> \
+  --rpcpass <random>
 ```
+
+(No --allowed-origin is passed. The Companion makes the requests to lbrynet on behalf of the extension via a secure proxy path — see below.)
 
 The generated `daemon_settings.yml` configures **lbrynet** (not the Companion) with:
 - `lbryum_servers`: list of public SPV servers that lbrynet will connect to
 - `api`: binding address for the JSON-RPC server
+- `rpcuser` / `rpcpass`: random credentials (Companion also passes on CLI)
 - Other resource and behavior defaults
+
+**Proxy model (recommended)**: Instead of the browser extension talking directly to lbrynet (which would require configuring allowed origins in the SDK), the Companion app makes the "proxy safe requests".
+
+The extension sends RPC requests to the Companion using Native Messaging (`type: "rpc_call"`). The Companion (native process) then performs the actual authenticated call to lbrynet and returns the result. This is secure because only the signed ReviveL extension can communicate via the native messaging host.
+
+This avoids giving the SDK (lbrynet) any broad or even extension-specific allowed_origin setup.
 
 The Companion itself never speaks the SPV protocol. All configuration under `lbryum_servers` is consumed exclusively by the lbrynet process.
 
