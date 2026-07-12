@@ -31,17 +31,74 @@ In the UI:
 - Start Daemon
 - Status should show RPC reachable + connected to SPV server
 
-## Build Installers
+## Building from Source
+
+### Prerequisites
+- Rust toolchain (stable, via [rustup](https://rustup.rs/))
+- Node.js 18+ and npm
+- Git
+
+### Platform-specific setup
+
+**Linux**
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential curl wget file \
+  pkg-config libglib2.0-dev \
+  libwebkit2gtk-4.1-dev \
+  libgtk-3-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev patchelf
+```
+
+**Windows**
+- Visual Studio 2022 Build Tools (or full Visual Studio) with "Desktop development with C++"
+- WebView2 Evergreen Runtime (usually pre-installed on modern Windows)
+
+**macOS**
+- Xcode Command Line Tools: `xcode-select --install`
+
+### Development
+```bash
+cd revivel-companion
+npm install
+npm run tauri dev
+```
+
+### Local production build (current OS only)
 ```bash
 npm run tauri build
 ```
 
-Artifacts will be in `src-tauri/target/release/bundle/` (or `target/release/bundle`):
+Bundles are placed in `src-tauri/target/release/bundle/`:
 - Linux: `.deb`, `.AppImage`, `.rpm`
-- Windows (cross): `.msi`, `.exe` (requires Windows or cross setup)
-- macOS: `.dmg`, `.app` (requires macOS or cross)
+- Windows: `.exe` (and `.msi` if bundler tools are present)
+- macOS: `.app` and `.dmg`
 
-See [BUILD.md](BUILD.md) for full cross-platform instructions and prerequisites.
+### Building for all platforms locally
+Where cross-compilation is possible, use the helper script:
+```bash
+./compile-all.sh
+```
+
+This attempts:
+- Native Linux build
+- Windows cross-compilation (using `cargo-xwin`)
+- macOS cross-compilation (binaries only; full app bundles require a macOS machine)
+- Reproducible Linux build via Docker
+
+**Note:** Full signed Windows and macOS installers are most reliably produced via the GitHub Actions CI (see below).
+
+### Recommended: Build via GitHub Actions (all platforms)
+The repository includes `.github/workflows/build.yml`. On every push it builds on:
+- `ubuntu-latest` → Linux bundles
+- `windows-latest` → Windows `.exe` / `.msi`
+- `macos-latest` → macOS universal `.app` / `.dmg`
+
+Artifacts are uploaded automatically. You can also trigger it manually from the Actions tab.
+
+See [BUILD.md](BUILD.md) for complete cross-platform details, Docker instructions, troubleshooting, and how to include a pre-bundled `lbrynet` binary.
 
 ## How the ReviveL Extension Uses It
 See [INTEGRATION.md](INTEGRATION.md) for details.
