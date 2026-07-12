@@ -1,6 +1,6 @@
 [package]
 name = "revivel-companion"
-version = "0.1.5"
+version = "0.1.5-hotfix1"
 description = "ReviveL Companion - lbrynet daemon launcher and SPV wallet manager for the ReviveL browser extension"
 authors = ["ReviveL"]
 edition = "2021"
