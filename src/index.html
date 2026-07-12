@@ -75,11 +75,13 @@
             <input type="checkbox" id="auto-launch-os" /> Launch companion with OS (minimized to tray)
           </label>
           <label>
-            <input type="checkbox" id="allow-extension" /> Allow ReviveL browser extension access (adds --allowed-origin "*")
+            <input type="checkbox" id="allow-extension" /> Allow ReviveL browser extension access (uses the Extension ID above for --allowed-origin + Native Messaging)
           </label>
           <div>
-            <label class="small">ReviveL Extension ID (for lbry:// forwarding; configurable, may change after store publish):</label><br/>
-            <input type="text" id="extension-id" value="bgehhgganagafhmkbpgiockhfpgbhebk" style="width: 100%; font-family: monospace; font-size: 12px;" />
+            <label class="small">ReviveL Extension ID (for custom/unpacked dev builds only):</label><br/>
+            <input type="text" id="extension-id" value="mphijnbejfkmcahhjlchcghmjegoefkf" style="width: 100%; font-family: monospace; font-size: 12px;" />
+            <button id="use-stable-id" style="margin-top:4px; font-size:11px;">Use stable official ID (recommended for .zip / .crx downloads)</button>
+            <button id="btn-reset-ext-id" style="margin-top:4px; font-size:11px; background:#552;">Reset Extension ID</button>
           </div>
           <div>
             <label class="small">SPV Servers (one per line, for failover on disconnects):</label><br/>
@@ -114,8 +116,8 @@
             <div class="stats-row"><span class="label">Upload Speed:</span> <span id="stats-upload-speed" class="value">—</span></div>
             <div class="stats-row"><span class="label">Active Connections:</span> <span id="stats-connections" class="value">—</span></div>
           </div>
-          <p class="small">Statistics are pulled from the local lbrynet daemon. Speeds are current instantaneous rates.</p>
-          <button id="btn-refresh-stats">Refresh Statistics</button>
+          <p class="small">Statistics are pulled from the local lbrynet daemon. Speeds are current instantaneous rates. Totals are accumulated by the Companion (persisted across restarts).</p>
+          <button id="btn-reset-stats" style="background: #444;">Reset Stats</button>
         </section>
       </div>
 
@@ -123,5 +125,36 @@
         <p class="small">Using lbrynet v0.113.0 • SPV mode (no lbcd required) • <a href="#" id="link-docs">Docs</a></p>
       </footer>
     </main>
+
+    <!-- First-time Setup Modal / Window -->
+    <div id="setup-modal" class="modal-overlay" style="display: none;">
+      <div class="modal">
+        <h2>Welcome to ReviveL Companion</h2>
+        <p><strong>First-time setup: Extension ID</strong></p>
+        <p>
+          To securely connect the ReviveL browser extension, we need its unique Extension ID.
+          This is used for Native Messaging and to restrict access to lbrynet.
+        </p>
+        <ol>
+          <li>Open <code>chrome://extensions</code> (or <code>brave://extensions</code>)</li>
+          <li>Turn on "Developer mode" (top right)</li>
+          <li>Find the ReviveL extension</li>
+          <li>Click the ID (copy it)</li>
+          <li>Paste below</li>
+        </ol>
+        <p class="small">
+          <strong>For official published .crx / store version:</strong> use the stable ID (pre-filled):
+          <code>mphijnbejfkmcahhjlchcghmjegoefkf</code>
+        </p>
+        <input type="text" id="setup-ext-id" placeholder="Paste extension ID here" style="width:100%; font-family:monospace; font-size:12px; padding:6px;" />
+        <div style="margin-top:12px;">
+          <button id="btn-save-setup-id">Save Extension ID & Continue</button>
+          <button id="btn-use-stable-setup" style="background:#333; margin-left:8px;">Use stable official ID</button>
+        </div>
+        <p class="small" style="margin-top:12px; color:#888;">
+          You can change or reset this later in the Settings tab.
+        </p>
+      </div>
+    </div>
   </body>
 </html>

@@ -112,7 +112,7 @@ In short:
 The Companion registers itself as the handler for the `lbry:` custom scheme on supported OSes (Windows, macOS, Linux).
 
 - When you type a `lbry://...` address in Chrome or Brave (or click such a link), the OS launches the Companion.
-- The Companion then opens the ReviveL extension's player: `chrome-extension://bgehhgganagafhmkbpgiockhfpgbhebk/player.html?uri=lbry%3A%2F%2F...`
+- The Companion then opens the ReviveL extension's player: `chrome-extension://mphijnbejfkmcahhjlchcghmjegoefkf/player.html?uri=lbry%3A%2F%2F...`
 - A "Register lbry:// protocol handler" button is available in the UI (registration may require restart, admin rights, or proper installation on some systems).
 - For the best experience, install the companion and ensure the ReviveL extension is enabled.
 

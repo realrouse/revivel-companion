@@ -68,17 +68,24 @@ pub struct AppSettings {
     pub rpcuser: String,
     #[serde(default)]
     pub rpcpass: String,
+    /// Persisted cumulative transfer stats (MB). Survives restarts.
+    #[serde(default)]
+    pub stats_download_total_mb: f64,
+    #[serde(default)]
+    pub stats_upload_total_mb: f64,
 }
 
 fn default_extension_id() -> String {
-    "bgehhgganagafhmkbpgiockhfpgbhebk".to_string()
+    // Empty means "not yet set by user" -> trigger first-time setup UI
+    "".to_string()
 }
 
 fn default_spv_servers() -> Vec<String> {
-    // Use IPs to avoid DNS resolution issues at startup (common cause of "Temporary failure in name resolution")
+    // Hostnames preferred for UX and long-term (lbrynet resolves them).
+    // IPs were previously used as workaround for certain DNS/router issues at startup.
     vec![
-        "88.99.63.52:50001".to_string(),   // s1.lbry.network
-        "51.81.109.111:50001".to_string(), // a-hub1.odysee.com
+        "s1.lbry.network:50001".to_string(),
+        "a-hub1.odysee.com:50001".to_string(),
     ]
 }
 
@@ -111,6 +118,8 @@ impl Default for AppSettings {
             spv_servers: default_spv_servers(),
             rpcuser: String::new(),
             rpcpass: String::new(),
+            stats_download_total_mb: 0.0,
+            stats_upload_total_mb: 0.0,
         }
     }
 }
@@ -175,6 +184,12 @@ struct DaemonManager {
     recovery_history: Vec<String>,
     rpcuser: Option<String>,
     rpcpass: Option<String>,
+    // Running cumulative stats (loaded from settings, updated over time)
+    stats_download_total_mb: f64,
+    stats_upload_total_mb: f64,
+    last_stats_time: Option<std::time::Instant>,
+    last_download_bps: f64,
+    last_upload_bps: f64,
 }
 
 impl DaemonManager {
@@ -203,6 +218,11 @@ impl DaemonManager {
             recovery_history: vec![],
             rpcuser: None,
             rpcpass: None,
+            stats_download_total_mb: 0.0,
+            stats_upload_total_mb: 0.0,
+            last_stats_time: None,
+            last_download_bps: 0.0,
+            last_upload_bps: 0.0,
         }
     }
 
@@ -266,21 +286,28 @@ impl DaemonManager {
             .await
             .map_err(|e| AppError::Download(e.to_string()))?;
 
-        // Extract the single file from zip
+        // Extract the binary from zip (robust: do not assume exactly 1 entry; find by name)
         let reader = std::io::Cursor::new(bytes);
         let mut archive =
             zip::ZipArchive::new(reader).map_err(|e| AppError::Zip(e.to_string()))?;
 
-        if archive.len() != 1 {
-            return Err(AppError::Zip("unexpected archive contents".into()));
+        // Find the index first (to avoid overlapping mutable borrows on archive), then extract.
+        let mut chosen_idx: Option<usize> = None;
+        for i in 0..archive.len() {
+            {
+                let f = archive.by_index(i).map_err(|e| AppError::Zip(e.to_string()))?;
+                let name = f.name().to_ascii_lowercase();
+                if name.ends_with("lbrynet.exe") || name.ends_with("/lbrynet.exe") || name == "lbrynet" || name.ends_with("/lbrynet") {
+                    chosen_idx = Some(i);
+                    break;
+                }
+            }
         }
-
-        let mut file = archive
-            .by_index(0)
-            .map_err(|e| AppError::Zip(e.to_string()))?;
+        let idx = chosen_idx.ok_or_else(|| AppError::Zip("could not find lbrynet binary inside archive".into()))?;
+        let mut chosen_file = archive.by_index(idx).map_err(|e| AppError::Zip(e.to_string()))?;
 
         let mut out_file = std::fs::File::create(&target)?;
-        std::io::copy(&mut file, &mut out_file)?;
+        std::io::copy(&mut chosen_file, &mut out_file)?;
 
         // Permissions
         #[cfg(unix)]
@@ -301,11 +328,16 @@ impl DaemonManager {
         servers_list.sort_by_key(|s| if s.contains("88.99.63.52") || s.contains("s1.lbry.network") { 0 } else { 1 });
         let servers_yaml: Vec<String> = servers_list.iter().map(|s| format!("- {}", s)).collect();
         let allowed_line = if allow_extension {
-            // Strict origin (not "*"). Companion also provides safe proxy path via Native Messaging.
+            // Strict origin restriction using the stable extension ID.
+            // This is the primary defense because lbrynet does not enforce Basic Auth on localhost.
+            // Only requests with matching Origin header are allowed.
             format!("allowed_origin: \"chrome-extension://{}/\"\n", extension_id)
         } else {
             "# allowed_origin disabled\n".to_string()
         };
+        // Sanitize data dir for cross-platform YAML (backslashes on Windows break YAML parsing / escapes in download_directory etc.)
+        let data_str = self.data_dir.to_string_lossy().replace('\\', "/");
+
         let mut content = format!(
             r#"# ReviveL Companion generated config for lbrynet
 # Uses SPV mode by default (no full node/lbcd required)
@@ -333,7 +365,7 @@ concurrent_blob_downloads: 2
             rpcpass = rpcpass,
             servers = servers_yaml.join("\n"),
             allowed = allowed_line,
-            data = self.data_dir.display()
+            data = data_str
         );
 
         // Dedent to ensure clean YAML (no leading whitespace on keys).
@@ -377,13 +409,13 @@ concurrent_blob_downloads: 2
         }
 
         let bin = self.find_or_download_binary().await?;
-        let effective_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
+        let effective_id = if extension_id.is_empty() { EXTENSION_ID } else { extension_id };
         self.write_config(allow_extension, servers, rpcuser, rpcpass, effective_id)?;
 
         // Launch lbrynet start with our data dir and config.
-        // We use strict allowed_origin (specific extension ID) because lbrynet does not
-        // enforce HTTP Basic Auth on localhost connections. The origin list is the effective
-        // control that stops arbitrary websites from reaching wallet methods.
+        // We use strict allowed_origin matching the extension ID.
+        // lbrynet does not enforce Basic Auth on localhost, so the origin list
+        // is the main control preventing arbitrary web pages from accessing the wallet.
         let mut cmd = Command::new(&bin);
         cmd.arg("start")
             .arg("--data-dir")
@@ -404,9 +436,8 @@ concurrent_blob_downloads: 2
         }
 
         if allow_extension {
-            let eff_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
-            // Set strict origin for the specific extension. This is a defense layer.
-            // Primary safety comes from the Companion making proxy requests (see rpc_call via NM).
+            let eff_id = if extension_id.is_empty() { EXTENSION_ID } else { extension_id };
+            // Strict origin for the specific extension ID.
             cmd.arg("--allowed-origin").arg(format!("chrome-extension://{}/", eff_id));
         }
 
@@ -417,6 +448,7 @@ concurrent_blob_downloads: 2
         // On Windows hide console window if possible
         #[cfg(target_os = "windows")]
         {
+            #[allow(unused_imports)]
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
@@ -441,7 +473,7 @@ concurrent_blob_downloads: 2
         self.failures = 0;
         self.last_restart = Some(std::time::Instant::now());
         self.allowed_origin = if allow_extension {
-            let eff_id = if extension_id.is_empty() { "bgehhgganagafhmkbpgiockhfpgbhebk" } else { extension_id };
+            let eff_id = if extension_id.is_empty() { EXTENSION_ID } else { extension_id };
             Some(format!("chrome-extension://{}/", eff_id))
         } else { None };
         self.rpcuser = Some(rpcuser.to_string());
@@ -501,11 +533,25 @@ concurrent_blob_downloads: 2
 
         if let Some(mut child) = self.child.take() {
             // Give time for clean shutdown
-            sleep(Duration::from_millis(800)).await;
+            sleep(Duration::from_millis(600)).await;
 
             // Then kill our child if still alive
             let _ = child.kill().await;
             let _ = child.wait().await;
+
+            // Extra force kill on Windows (the companion .exe may keep child tree otherwise in some cases)
+            #[cfg(target_os = "windows")]
+            {
+                // Best effort: if the binary name is known, taskkill the lbrynet.exe
+                if let Some(bp) = &self.binary_path {
+                    if let Some(name) = bp.file_name().and_then(|n| n.to_str()) {
+                        let _ = tokio::process::Command::new("taskkill")
+                            .args(["/F", "/IM", name, "/T"])
+                            .output()
+                            .await;
+                    }
+                }
+            }
         }
         self.should_be_running = false;
         self.start_time = None;
@@ -557,6 +603,7 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
+        req = req.header("Origin", format!("chrome-extension://{}/", EXTENSION_ID));
 
         match req.send().await {
             Ok(resp) => resp.status().is_success(),
@@ -601,6 +648,7 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
+        req = req.header("Origin", format!("chrome-extension://{}/", EXTENSION_ID));
 
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
@@ -629,7 +677,7 @@ concurrent_blob_downloads: 2
         })
     }
 
-    async fn query_blob_stats(&self) -> Option<BlobStats> {
+    async fn query_blob_stats(&mut self) -> Option<BlobStats> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
@@ -657,32 +705,50 @@ concurrent_blob_downloads: 2
             stats.finished_blobs = blob.get("finished_blobs").and_then(|v| v.as_u64());
 
             if let Some(conns) = blob.get("connections") {
-                // Try to extract totals if present, otherwise sum
+                // Extract current rates: handle both "object of per-conn bps" and direct number
                 let mut down: f64 = 0.0;
                 let mut up: f64 = 0.0;
 
-                if let Some(incoming) = conns.get("incoming_bps").and_then(|v| v.as_object()) {
-                    for (_, val) in incoming {
-                        if let Some(bps) = val.as_f64() { down += bps; }
+                if let Some(v) = conns.get("incoming_bps") {
+                    if let Some(obj) = v.as_object() {
+                        for (_, val) in obj {
+                            if let Some(bps) = val.as_f64() { down += bps; }
+                        }
+                    } else if let Some(bps) = v.as_f64() {
+                        down = bps;
                     }
                 }
-                if let Some(outgoing) = conns.get("outgoing_bps").and_then(|v| v.as_object()) {
-                    for (_, val) in outgoing {
-                        if let Some(bps) = val.as_f64() { up += bps; }
+                if let Some(v) = conns.get("outgoing_bps") {
+                    if let Some(obj) = v.as_object() {
+                        for (_, val) in obj {
+                            if let Some(bps) = val.as_f64() { up += bps; }
+                        }
+                    } else if let Some(bps) = v.as_f64() {
+                        up = bps;
                     }
-                }
-
-                // Also check for direct total fields some versions may have
-                if let Some(total_down) = conns.get("total_incoming_mbs").and_then(|v| v.as_f64()) {
-                    stats.total_downloaded_mb = Some(total_down);
-                }
-                if let Some(total_up) = conns.get("total_outgoing_mbs").and_then(|v| v.as_f64()) {
-                    stats.total_uploaded_mb = Some(total_up);
                 }
 
                 stats.download_bps = Some(down);
                 stats.upload_bps = Some(up);
+
+                // Accumulate totals using observed rate * delta_time (in MB).
+                // We use the rate seen on this poll as the estimate for the interval just ended.
+                let now = std::time::Instant::now();
+                if let Some(last_t) = self.last_stats_time {
+                    let delta_s = now.duration_since(last_t).as_secs_f64();
+                    if delta_s > 0.0 {
+                        self.stats_download_total_mb += down * delta_s / (1024.0 * 1024.0);
+                        self.stats_upload_total_mb += up * delta_s / (1024.0 * 1024.0);
+                    }
+                }
+                self.last_stats_time = Some(now);
+                self.last_download_bps = down;
+                self.last_upload_bps = up;
             }
+
+            // Always report the running (persisted + accumulated) totals
+            stats.total_downloaded_mb = Some(self.stats_download_total_mb);
+            stats.total_uploaded_mb = Some(self.stats_upload_total_mb);
         }
 
         // Try to get active connections count
@@ -695,9 +761,7 @@ concurrent_blob_downloads: 2
                 if let Some(outgoing) = conns.get("outgoing_bps").and_then(|v| v.as_object()) {
                     count += outgoing.len() as u64;
                 }
-                if count > 0 {
-                    stats.active_connections = Some(count);
-                }
+                stats.active_connections = Some(count);
             }
         }
 
@@ -926,6 +990,27 @@ async fn get_status(state: State<'_, AppState>) -> Result<DaemonStatus> {
         None
     };
 
+    // Persist updated cumulative totals (if we got fresh stats)
+    if let Some(st) = &stats {
+        let mut settings = state.settings.lock().await;
+        let mut changed = false;
+        if let Some(dl) = st.total_downloaded_mb {
+            if dl > settings.stats_download_total_mb {
+                settings.stats_download_total_mb = dl;
+                changed = true;
+            }
+        }
+        if let Some(ul) = st.total_uploaded_mb {
+            if ul > settings.stats_upload_total_mb {
+                settings.stats_upload_total_mb = ul;
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = std::fs::write(&state.settings_path, serde_json::to_string_pretty(&*settings).unwrap_or_default());
+        }
+    }
+
     Ok(DaemonStatus {
         running: managed,
         rpc_reachable: listening,
@@ -1021,8 +1106,12 @@ async fn quit_app(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(
         let _ = mgr.stop().await;
     }
     // Give a moment for cleanup
-    sleep(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(400)).await;
     app.exit(0);
+    // Guarantee process termination (especially important for the built .exe on Windows 10)
+    #[cfg(target_os = "windows")]
+    std::process::exit(0);
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -1031,6 +1120,27 @@ async fn ensure_binary(state: State<'_, AppState>) -> Result<String> {
     let mut mgr = state.manager.lock().await;
     let p = mgr.find_or_download_binary().await?;
     Ok(p.display().to_string())
+}
+
+#[tauri::command]
+async fn reset_stats(state: State<'_, AppState>) -> Result<()> {
+    // Reset in-memory
+    {
+        let mut mgr = state.manager.lock().await;
+        mgr.stats_download_total_mb = 0.0;
+        mgr.stats_upload_total_mb = 0.0;
+        mgr.last_stats_time = None;
+        mgr.last_download_bps = 0.0;
+        mgr.last_upload_bps = 0.0;
+    }
+    // Reset in settings and persist
+    {
+        let mut settings = state.settings.lock().await;
+        settings.stats_download_total_mb = 0.0;
+        settings.stats_upload_total_mb = 0.0;
+        let _ = std::fs::write(&state.settings_path, serde_json::to_string_pretty(&*settings).unwrap_or_default());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1051,6 +1161,7 @@ async fn save_settings(
     current.allow_revivel_extension = settings.allow_revivel_extension;
     current.revivel_extension_id = settings.revivel_extension_id;
     current.spv_servers = settings.spv_servers;
+    // Preserve runtime stats (they are not sent from UI)
     // Do not overwrite rpcuser/rpcpass if empty in the incoming settings
 
     // Persist
@@ -1088,14 +1199,34 @@ async fn save_settings(
 
 #[tauri::command]
 async fn open_folder(app: tauri::AppHandle, state: State<'_, AppState>, which: String) -> Result<()> {
-    let mgr = state.manager.lock().await;
-    let target = match which.as_str() {
-        "logs" => mgr.logs_dir.clone(),
-        _ => mgr.data_dir.clone(),
+    let target = {
+        let mgr = state.manager.lock().await;
+        match which.as_str() {
+            "logs" => mgr.logs_dir.clone(),
+            _ => mgr.data_dir.clone(),
+        }
     };
     let _ = std::fs::create_dir_all(&target);
+
+    // Use opener plugin first (cross platform). Pass owned String to satisfy Into<String>.
     let path_str = target.to_string_lossy().to_string();
-    let _ = app.opener().open_path(path_str, None::<String>);
+    let opened = app.opener().open_path(path_str.clone(), None::<String>).is_ok();
+
+    if !opened {
+        // Fallbacks for reliability (esp. on Windows 10 where plugin may be silent)
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("explorer").arg(&path_str).spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(&path_str).spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(&path_str).spawn();
+        }
+    }
     Ok(())
 }
 
@@ -1132,15 +1263,31 @@ fn install_native_messaging_host() -> std::result::Result<(), String> {
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("failed to get exe path: {}", e))?;
 
+    // Load the configured extension ID from settings.
+    let configured_id: String = std::fs::read_to_string(get_app_settings_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok())
+        .map(|s| s.revivel_extension_id)
+        .unwrap_or_default();
+
+    let mut allowed: Vec<String> = KNOWN_EXTENSION_IDS
+        .iter()
+        .map(|id| format!("chrome-extension://{}/", id))
+        .collect();
+
+    if !configured_id.is_empty() {
+        let configured_origin = format!("chrome-extension://{}/", configured_id);
+        if !allowed.contains(&configured_origin) {
+            allowed.push(configured_origin);
+        }
+    }
+
     let manifest = serde_json::json!({
         "name": "revivel_companion",
         "description": "ReviveL Companion native messaging host",
         "path": exe_path.to_string_lossy(),
         "type": "stdio",
-        "allowed_origins": [
-            "chrome-extension://bgehhgganagafhmkbpgiockhfpgbhebk/",
-            "chrome-extension://revivel-companion/"
-        ]
+        "allowed_origins": allowed
     });
 
     let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -1305,10 +1452,8 @@ fn handle_native_message(msg: serde_json::Value) -> serde_json::Value {
                 return serde_json::json!({ "success": false, "error": "credentials not available" });
             }
             "rpc_call" => {
-                // Proxy safe request: the Companion makes the actual call to lbrynet
-                // using the stored credentials. This way the SDK (lbrynet) does not need
-                // broad "allowed_origin" setup. Only the whitelisted extension can ask
-                // via Native Messaging.
+                // Proxy request from the (whitelisted via NM manifest) extension.
+                // The Companion adds Basic Auth + the correct Origin header.
                 let settings_path = get_app_settings_path();
                 if let Ok(content) = std::fs::read_to_string(&settings_path) {
                     if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
@@ -1326,8 +1471,10 @@ fn handle_native_message(msg: serde_json::Value) -> serde_json::Value {
                                 .build()
                                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
+                            let origin = format!("chrome-extension://{}/", settings.revivel_extension_id);
                             let req = client.post("http://127.0.0.1:5279")
                                 .json(&body)
+                                .header("Origin", origin)
                                 .basic_auth(&settings.rpcuser, Some(&settings.rpcpass));
 
                             match req.send() {
@@ -1382,10 +1529,21 @@ fn open_url_in_browser(url: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-// Official ReviveL extension ID (update if the published extension ID changes)
-const EXTENSION_ID: &str = "bgehhgganagafhmkbpgiockhfpgbhebk";
-// Dev/test extension ID used during development (e.g. for testing with companion)
-const DEV_EXTENSION_ID: &str = "revivel-companion";
+// Primary stable ReviveL extension ID from the current .crx / packaged build.
+// This ID is the same for every user on every computer and OS.
+// Used for:
+// - allowed_origin in lbrynet (main security for direct access)
+// - Origin header sent by Companion proxy
+// - player.html URLs
+const EXTENSION_ID: &str = "mphijnbejfkmcahhjlchcghmjegoefkf";
+
+// Stable IDs that are allowed to use the Companion via Native Messaging and lbrynet.
+const KNOWN_EXTENSION_IDS: &[&str] = &[
+    "mphijnbejfkmcahhjlchcghmjegoefkf", // current stable .crx build
+    "bgehhgganagafhmkbpgiockhfpgbhebk", // previous published (transition)
+    "revivel-companion",                // dev token
+    "cjbnapmoeofopcfhobehilnffciednff", // dev/unpacked used in testing
+];
 
 fn handle_lbry_url(app: &tauri::AppHandle, args: Vec<String>, extension_id: &str) {
     for arg in args {
@@ -1423,11 +1581,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            // Load configured ID if possible for forwarded lbry events
+            // Load configured ID if possible for forwarded lbry events (use NM-compatible path)
             let id = {
-                let app_data = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let settings_path = app_data.join("settings.json");
-                std::fs::read_to_string(&settings_path)
+                let sp = get_app_settings_path();
+                std::fs::read_to_string(&sp)
                     .ok()
                     .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok())
                     .map(|s| s.revivel_extension_id)
@@ -1445,7 +1602,13 @@ pub fn run() {
 
             let _ = std::fs::create_dir_all(&app_data);
 
-            let settings_path = app_data.join("settings.json");
+            // Use the exact same settings path as the pure Native Messaging host mode
+            // so that credentials and extension ID are visible when Chrome launches the exe.
+            let settings_path = get_app_settings_path();
+            // Also ensure the com.revivel.companion dir exists
+            if let Some(parent) = settings_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
 
             // Load or default settings
             let mut loaded_settings: AppSettings = std::fs::read_to_string(&settings_path)
@@ -1479,6 +1642,17 @@ pub fn run() {
 
             // Daemon manager
             let manager = Arc::new(Mutex::new(DaemonManager::new(app_data.clone())));
+            // Initialize persisted stats from settings (sync-safe init)
+            {
+                let mgr = manager.clone();
+                let dl = loaded_settings.stats_download_total_mb;
+                let ul = loaded_settings.stats_upload_total_mb;
+                tauri::async_runtime::spawn(async move {
+                    let mut m = mgr.lock().await;
+                    m.stats_download_total_mb = dl;
+                    m.stats_upload_total_mb = ul;
+                });
+            }
 
             // Auto launcher setup
             let current_exe = std::env::current_exe().ok();
@@ -1659,7 +1833,7 @@ pub fn run() {
                 .build();
             }
 
-            // Ensure clean shutdown on window close (close button)
+            // Ensure clean shutdown on window close (close button). On Windows the X often requires extra force.
             if let Some(window) = app.get_webview_window("main") {
                 let mgr_for_close = manager.clone();
                 let app_handle_for_close = window.app_handle().clone();
@@ -1676,8 +1850,11 @@ pub fn run() {
                                 let mut mgr = m.lock().await;
                                 let _ = mgr.stop().await;
                             }
-                            sleep(Duration::from_millis(500)).await;
+                            sleep(Duration::from_millis(400)).await;
                             app_handle.exit(0);
+                            // Last resort to guarantee termination (some Windows envs keep process after app.exit)
+                            #[cfg(target_os = "windows")]
+                            std::process::exit(0);
                         });
                     }
                 });
@@ -1685,10 +1862,10 @@ pub fn run() {
 
             // Handle lbry:// URLs passed on initial launch (e.g. from OS protocol handler)
             let initial_args: Vec<String> = std::env::args().collect();
-            // Try to use configured extension ID from settings
+            // Try to use configured extension ID from settings (use the common NM-compatible path)
             let initial_ext_id = {
-                let settings_path = app_data.join("settings.json");
-                std::fs::read_to_string(&settings_path)
+                let sp = get_app_settings_path();
+                std::fs::read_to_string(&sp)
                     .ok()
                     .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok())
                     .map(|s| s.revivel_extension_id)
@@ -1724,6 +1901,7 @@ pub fn run() {
             force_kill_existing_daemon,
             quit_app,
             ensure_binary,
+            reset_stats,
             get_settings,
             save_settings,
             open_folder,

@@ -10,19 +10,19 @@ When a user types or clicks a `lbry://` URL in Chrome or Brave (or any browser),
 ## Current Implementation in Companion (for your reference)
 - The Companion registers itself as the handler for the `lbry:` protocol on Windows, macOS, and Linux (using Tauri deep-link + OS-specific mechanisms like registry, Info.plist, .desktop files).
 - When the OS launches the Companion with a `lbry://...` argument (or forwards it to a running instance via single-instance plugin):
-  - It constructs: `chrome-extension://bgehhgganagafhmkbpgiockhfpgbhebk/player.html?uri=ENCODED_LBRY_URI`
+  - It constructs: `chrome-extension://mphijnbejfkmcahhjlchcghmjegoefkf/player.html?uri=ENCODED_LBRY_URI`
   - It uses the system opener to launch that URL in the user's default browser.
   - It also brings the Companion window to front (optional side effect).
 
 Example from user testing:
-chrome-extension://bgehhgganagafhmkbpgiockhfpgbhebk/player.html?uri=lbry%3A%2F%2F%40Chronicles_of_Bod%237%2FOne-old-fat-bike%2C-one-newly-skinny-man%2C-one-new-360-camera-and-the-one-and-only-traditional-Scotland%231&title=...
+chrome-extension://mphijnbejfkmcahhjlchcghmjegoefkf/player.html?uri=lbry%3A%2F%2F%40Chronicles_of_Bod%237%2FOne-old-fat-bike%2C-one-newly-skinny-man%2C-one-new-360-camera-and-the-one-and-only-traditional-Scotland%231&title=...
 
 The extension already supports `?uri=lbry%3A...` via player.html. We want to make this the official launch path for `lbry://` addresses.
 
 ## What the Extension Side Needs
 
 1. **Confirm / stabilize the extension ID**
-   - Current hardcoded in Companion: `bgehhgganagafhmkbpgiockhfpgbhebk`
+   - Current hardcoded in Companion: `mphijnbejfkmcahhjlchcghmjegoefkf`
    - Make sure this is the stable published ID for the ReviveL extension in the Chrome Web Store.
    - If it ever changes, we need a way to sync (config file, or document it clearly).
 

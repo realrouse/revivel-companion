@@ -274,8 +274,17 @@ async function loadSettings() {
     }
     // Extension ID (for lbry:// forwarding) - shown for advanced users
     const extIdEl = document.getElementById('extension-id');
-    if (extIdEl && cfg.revivel_extension_id) {
-      extIdEl.value = cfg.revivel_extension_id;
+    const stableId = 'mphijnbejfkmcahhjlchcghmjegoefkf';
+    if (extIdEl) {
+      const currentId = cfg.revivel_extension_id || '';
+      if (currentId === '') {
+        // No ID set yet -> will be handled by setup modal after load
+        extIdEl.value = stableId;
+      } else if (currentId === stableId) {
+        extIdEl.value = stableId;
+      } else {
+        extIdEl.value = currentId;
+      }
     }
     const spvEl = document.getElementById('spv-servers');
     if (spvEl && cfg.spv_servers) {
@@ -284,13 +293,48 @@ async function loadSettings() {
   } catch (_) {}
 }
 
+function showSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  const input = document.getElementById('setup-ext-id');
+  if (modal && input) {
+    // Prefill with current value or stable
+    const current = document.getElementById('extension-id') ? document.getElementById('extension-id').value : '';
+    input.value = current || 'mphijnbejfkmcahhjlchcghmjegoefkf';
+    modal.style.display = 'flex';
+  }
+}
+
+function hideSetupModal() {
+  const modal = document.getElementById('setup-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveExtensionIdFromSetup() {
+  const input = document.getElementById('setup-ext-id');
+  if (!input) return;
+  const newId = input.value.trim();
+  if (!newId) {
+    alert('Please enter a valid Extension ID (or use the stable one).');
+    return;
+  }
+  // Update the settings field
+  const extIdEl = document.getElementById('extension-id');
+  if (extIdEl) extIdEl.value = newId;
+
+  // Save settings (this will also reinstall NM manifest)
+  await saveSettings();
+  hideSetupModal();
+  // Refresh to apply
+  await refreshStatus();
+}
+
 async function saveSettings() {
   const autoStart = document.getElementById('auto-start').checked;
   const autoOs = document.getElementById('auto-launch-os').checked;
   const allowEl = document.getElementById('allow-extension');
   const allowExt = allowEl ? allowEl.checked : true;
   const extIdEl = document.getElementById('extension-id');
-  const extId = (extIdEl && extIdEl.value.trim()) || 'bgehhgganagafhmkbpgiockhfpgbhebk';
+  const extId = (extIdEl && extIdEl.value.trim()) || '';  // allow empty -> triggers setup on next load
   const spvEl = document.getElementById('spv-servers');
   const spvServers = (spvEl && spvEl.value.trim()) ? spvEl.value.trim().split(/\r?\n/).filter(s => s.trim()) : ['a-hub1.odysee.com:50001', 's1.lbry.network:50001'];
   try {
@@ -303,6 +347,12 @@ async function saveSettings() {
         spv_servers: spvServers
       }
     });
+
+    // Re-install the native messaging host manifest. This ensures the current
+    // extension ID (especially for unpacked/dev builds) is in allowed_origins.
+    try {
+      await invoke('install_native_messaging_manifest');
+    } catch (e) { console.warn('Could not reinstall NM manifest:', e); }
   } catch (e) { console.error(e); }
 }
 
@@ -379,6 +429,14 @@ window.addEventListener('DOMContentLoaded', () => {
     extIdEl.addEventListener('change', saveSettings);
     extIdEl.addEventListener('blur', saveSettings);
   }
+
+  const useStableBtn = document.getElementById('use-stable-id');
+  if (useStableBtn && extIdEl) {
+    useStableBtn.addEventListener('click', () => {
+      extIdEl.value = 'mphijnbejfkmcahhjlchcghmjegoefkf';
+      saveSettings();
+    });
+  }
   const spvEl = document.getElementById('spv-servers');
   if (spvEl) {
     spvEl.addEventListener('change', saveSettings);
@@ -409,6 +467,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Initial load
   loadSettings();
+  // Show first-time setup if no extension ID is configured
+  setTimeout(async () => {
+    try {
+      const cfg = await invoke('get_settings');
+      const id = (cfg.revivel_extension_id || '').trim();
+      if (!id) {
+        showSetupModal();
+      }
+    } catch (_) {}
+  }, 300);
   // Initial status + conflict detection + auto-start logic
   refreshStatus().then(async () => {
     try {
@@ -436,8 +504,9 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Poll status every 4s
-  setInterval(refreshStatus, 4000);
+  // Poll status (and thus stats) every 500ms for better accumulation accuracy.
+  // Totals = sum( instantaneous_rate * delta_time ) between polls.
+  setInterval(refreshStatus, 500);
 
   // Tab system
   document.querySelectorAll('.tab').forEach(tab => {
@@ -454,10 +523,53 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Stats refresh button
-  const refreshStatsBtn = document.getElementById('btn-refresh-stats');
-  if (refreshStatsBtn) {
-    refreshStatsBtn.addEventListener('click', refreshStats);
+  // Reset stats button
+  const resetStatsBtn = document.getElementById('btn-reset-stats');
+  if (resetStatsBtn) {
+    resetStatsBtn.addEventListener('click', async () => {
+      try {
+        await invoke('reset_stats');
+        await refreshStats();
+      } catch (e) {
+        alert('Failed to reset stats: ' + e);
+      }
+    });
+  }
+
+  // Setup modal buttons
+  const saveSetupBtn = document.getElementById('btn-save-setup-id');
+  if (saveSetupBtn) {
+    saveSetupBtn.addEventListener('click', async () => {
+      await saveExtensionIdFromSetup();
+    });
+  }
+
+  const useStableSetupBtn = document.getElementById('btn-use-stable-setup');
+  if (useStableSetupBtn) {
+    useStableSetupBtn.addEventListener('click', () => {
+      const input = document.getElementById('setup-ext-id');
+      if (input) input.value = 'mphijnbejfkmcahhjlchcghmjegoefkf';
+    });
+  }
+
+  // Reset Extension ID button (in Settings)
+  const resetExtIdBtn = document.getElementById('btn-reset-ext-id');
+  if (resetExtIdBtn) {
+    resetExtIdBtn.addEventListener('click', async () => {
+      if (!confirm('Reset the Extension ID? This will require re-entering it (e.g. for a different build or dev version).')) {
+        return;
+      }
+      const extIdEl = document.getElementById('extension-id');
+      if (extIdEl) extIdEl.value = '';
+      try {
+        await saveSettings(); // saves empty ID
+        await invoke('install_native_messaging_manifest');
+        // Show setup again
+        showSetupModal();
+      } catch (e) {
+        alert('Failed to reset: ' + e);
+      }
+    });
   }
 
   // Initial stats load
@@ -531,6 +643,6 @@ function renderStats(s) {
   }
 
   if (conns) {
-    conns.textContent = st.active_connections != null ? st.active_connections : '—';
+    conns.textContent = st.active_connections != null ? st.active_connections.toString() : '0';
   }
 }
