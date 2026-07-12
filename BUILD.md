@@ -43,16 +43,28 @@ Bundles appear under:
 
 ## Cross-platform notes
 
-Tauri 2 supports cross compilation with some effort:
+The project is configured for **Windows, macOS, and Linux** (`targets: "all"` in tauri.conf.json + multi-platform icons).
 
-**Linux → Windows**
-- Use cargo zigbuild or official Tauri guidance + wine/msi tools.
-- Simpler: use GitHub Actions with `tauri-action` matrix for all three OS.
+**Building locally**
+- You can only build for the OS you are currently on.
+- Use GitHub Actions (see `.github/workflows/build.yml`) for official Windows + macOS builds.
 
-**Linux → macOS**
-- Difficult without macOS hardware or paid cloud. Use GitHub Actions macOS runners.
+**Windows**
+- Install Visual Studio Build Tools + WebView2.
+- `npm run tauri build` will produce `.msi` and `.exe` (nsis).
 
-Recommended: set up GitHub Actions workflow for releases (see examples in Tauri docs).
+**macOS**
+- Requires Xcode command line tools.
+- Builds universal binary (Intel + Apple Silicon) by default.
+- For distribution: you should sign and notarize the app.
+
+**Recommended way to ship**
+A GitHub Actions workflow is already set up (`.github/workflows/build.yml`) that builds on:
+- `ubuntu-latest` → deb, AppImage, rpm
+- `windows-latest` → msi, nsis/exe
+- `macos-latest` → dmg, app (universal)
+
+It automatically creates draft releases with all platform artifacts.
 
 ## Icons
 Replace files in `src-tauri/icons/` with proper set (use `tauri icon` or the tauri-icon generator).
