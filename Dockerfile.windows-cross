@@ -1,0 +1,35 @@
+# Experimental Docker for cross-building Windows binary from Linux
+FROM rust:1.80-slim-bookworm
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    wget \
+    pkg-config \
+    clang \
+    lld \
+    llvm \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
+
+RUN cargo install cargo-xwin
+
+RUN rustup target add x86_64-pc-windows-msvc
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./src-tauri/
+COPY src-tauri/tauri.conf.json ./src-tauri/
+
+RUN npm ci
+
+COPY . .
+
+# Note: This will build the binary. Full installer bundling may need additional setup or native Windows.
+RUN cargo xwin build --target x86_64-pc-windows-msvc --release -p revivel_companion_lib || echo "Lib build may vary"
+# For full app: cargo tauri build --target x86_64-pc-windows-msvc
+# But bundler may have limitations in cross env.

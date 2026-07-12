@@ -123,6 +123,9 @@ function setStatusUI(s) {
 
   // Start animated dots for connecting states (Status/RPC, SPV Server, Blocks)
   startConnectingDots(s, rpc, spv, blocks);
+
+  // Also update statistics when status refreshes
+  renderStats(s);
 }
 
 function applyButtonStates(s) {
@@ -435,4 +438,99 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Poll status every 4s
   setInterval(refreshStatus, 4000);
+
+  // Tab system
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      // Deactivate all
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      // Activate clicked
+      tab.classList.add('active');
+      const target = tab.getAttribute('data-tab');
+      const content = document.getElementById(target);
+      if (content) content.classList.add('active');
+    });
+  });
+
+  // Stats refresh button
+  const refreshStatsBtn = document.getElementById('btn-refresh-stats');
+  if (refreshStatsBtn) {
+    refreshStatsBtn.addEventListener('click', refreshStats);
+  }
+
+  // Initial stats load
+  refreshStats();
 });
+
+// New: fetch and display download/upload statistics
+async function refreshStats() {
+  try {
+    const s = await invoke('get_status');
+    renderStats(s);
+  } catch (e) {
+    renderStats({ stats: null });
+  }
+}
+
+function renderStats(s) {
+  const finished = document.getElementById('stats-finished-blobs');
+  const downloaded = document.getElementById('stats-downloaded');
+  const uploaded = document.getElementById('stats-uploaded');
+  const dlSpeed = document.getElementById('stats-download-speed');
+  const upSpeed = document.getElementById('stats-upload-speed');
+  const conns = document.getElementById('stats-connections');
+
+  if (!s || !s.stats) {
+    if (finished) finished.textContent = '—';
+    if (downloaded) downloaded.textContent = '—';
+    if (uploaded) uploaded.textContent = '—';
+    if (dlSpeed) dlSpeed.textContent = '—';
+    if (upSpeed) upSpeed.textContent = '—';
+    if (conns) conns.textContent = '—';
+    return;
+  }
+
+  const st = s.stats;
+
+  if (finished) finished.textContent = st.finished_blobs != null ? st.finished_blobs.toLocaleString() : '—';
+
+  if (downloaded) {
+    if (st.total_downloaded_mb != null) {
+      downloaded.textContent = st.total_downloaded_mb.toFixed(2) + ' MB';
+    } else {
+      downloaded.textContent = '—';
+    }
+  }
+
+  if (uploaded) {
+    if (st.total_uploaded_mb != null) {
+      uploaded.textContent = st.total_uploaded_mb.toFixed(2) + ' MB';
+    } else {
+      uploaded.textContent = '—';
+    }
+  }
+
+  if (dlSpeed) {
+    if (st.download_bps != null) {
+      const mbps = (st.download_bps / 1024 / 1024).toFixed(2);
+      dlSpeed.textContent = `${mbps} MB/s`;
+    } else {
+      dlSpeed.textContent = '—';
+    }
+  }
+
+  if (upSpeed) {
+    if (st.upload_bps != null) {
+      const mbps = (st.upload_bps / 1024 / 1024).toFixed(2);
+      upSpeed.textContent = `${mbps} MB/s`;
+    } else {
+      upSpeed.textContent = '—';
+    }
+  }
+
+  if (conns) {
+    conns.textContent = st.active_connections != null ? st.active_connections : '—';
+  }
+}

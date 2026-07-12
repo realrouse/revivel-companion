@@ -124,6 +124,16 @@ pub struct WalletInfo {
     pub available_servers: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct BlobStats {
+    pub finished_blobs: Option<u64>,
+    pub total_downloaded_mb: Option<f64>,
+    pub total_uploaded_mb: Option<f64>,
+    pub download_bps: Option<f64>,
+    pub upload_bps: Option<f64>,
+    pub active_connections: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DaemonStatus {
     pub running: bool,
@@ -144,6 +154,8 @@ pub struct DaemonStatus {
     pub restart_count: u32,
     pub disconnected_count: u32,
     pub recovery_history: Vec<String>,
+    // Download / Upload statistics
+    pub stats: Option<BlobStats>,
 }
 
 #[derive(Debug)]
@@ -617,6 +629,81 @@ concurrent_blob_downloads: 2
         })
     }
 
+    async fn query_blob_stats(&self) -> Option<BlobStats> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .ok()?;
+
+        let body = serde_json::json!({ "method": "status", "params": {} });
+
+        let mut req = client.post(RPC_URL).json(&body);
+        if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
+            req = req.basic_auth(u, Some(p));
+        }
+
+        let resp = req.send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+
+        let json: serde_json::Value = resp.json().await.ok()?;
+        let result = json.get("result")?;
+
+        let mut stats = BlobStats::default();
+
+        // blob_manager stats
+        if let Some(blob) = result.get("blob_manager") {
+            stats.finished_blobs = blob.get("finished_blobs").and_then(|v| v.as_u64());
+
+            if let Some(conns) = blob.get("connections") {
+                // Try to extract totals if present, otherwise sum
+                let mut down: f64 = 0.0;
+                let mut up: f64 = 0.0;
+
+                if let Some(incoming) = conns.get("incoming_bps").and_then(|v| v.as_object()) {
+                    for (_, val) in incoming {
+                        if let Some(bps) = val.as_f64() { down += bps; }
+                    }
+                }
+                if let Some(outgoing) = conns.get("outgoing_bps").and_then(|v| v.as_object()) {
+                    for (_, val) in outgoing {
+                        if let Some(bps) = val.as_f64() { up += bps; }
+                    }
+                }
+
+                // Also check for direct total fields some versions may have
+                if let Some(total_down) = conns.get("total_incoming_mbs").and_then(|v| v.as_f64()) {
+                    stats.total_downloaded_mb = Some(total_down);
+                }
+                if let Some(total_up) = conns.get("total_outgoing_mbs").and_then(|v| v.as_f64()) {
+                    stats.total_uploaded_mb = Some(total_up);
+                }
+
+                stats.download_bps = Some(down);
+                stats.upload_bps = Some(up);
+            }
+        }
+
+        // Try to get active connections count
+        if let Some(blob) = result.get("blob_manager") {
+            if let Some(conns) = blob.get("connections") {
+                let mut count = 0u64;
+                if let Some(incoming) = conns.get("incoming_bps").and_then(|v| v.as_object()) {
+                    count += incoming.len() as u64;
+                }
+                if let Some(outgoing) = conns.get("outgoing_bps").and_then(|v| v.as_object()) {
+                    count += outgoing.len() as u64;
+                }
+                if count > 0 {
+                    stats.active_connections = Some(count);
+                }
+            }
+        }
+
+        Some(stats)
+    }
+
     /// Test if the RPC accepts requests that include an Origin header (as sent by browser extensions).
     /// This simulates what the ReviveL MV3 extension does. Returns true only if no 403.
     async fn is_extension_accessible(&self) -> bool {
@@ -833,6 +920,12 @@ async fn get_status(state: State<'_, AppState>) -> Result<DaemonStatus> {
     let disconn = mgr.disconnected_count;
     let history = mgr.recovery_history.iter().rev().take(10).cloned().collect(); // last 10
 
+    let stats = if listening {
+        mgr.query_blob_stats().await
+    } else {
+        None
+    };
+
     Ok(DaemonStatus {
         running: managed,
         rpc_reachable: listening,
@@ -850,6 +943,7 @@ async fn get_status(state: State<'_, AppState>) -> Result<DaemonStatus> {
         restart_count: restarts,
         disconnected_count: disconn,
         recovery_history: history,
+        stats,
     })
 }
 
