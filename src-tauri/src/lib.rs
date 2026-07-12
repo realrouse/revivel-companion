@@ -175,6 +175,7 @@ struct DaemonManager {
     config_path: PathBuf,
     logs_dir: PathBuf,
     allowed_origin: Option<String>,
+    extension_id: Option<String>,
     should_be_running: bool,
     start_time: Option<std::time::Instant>,
     restart_count: u32,
@@ -209,6 +210,7 @@ impl DaemonManager {
             config_path,
             logs_dir,
             allowed_origin: None,
+            extension_id: None,
             should_be_running: false,
             start_time: None,
             restart_count: 0,
@@ -472,9 +474,12 @@ concurrent_blob_downloads: 2
         self.restart_count += 1;
         self.failures = 0;
         self.last_restart = Some(std::time::Instant::now());
+        let eff_id = if extension_id.is_empty() { EXTENSION_ID } else { extension_id };
         self.allowed_origin = if allow_extension {
-            let eff_id = if extension_id.is_empty() { EXTENSION_ID } else { extension_id };
             Some(format!("chrome-extension://{}/", eff_id))
+        } else { None };
+        self.extension_id = if allow_extension {
+            Some(eff_id.to_string())
         } else { None };
         self.rpcuser = Some(rpcuser.to_string());
         self.rpcpass = Some(rpcpass.to_string());
@@ -556,6 +561,7 @@ concurrent_blob_downloads: 2
         self.should_be_running = false;
         self.start_time = None;
         self.allowed_origin = None;
+        self.extension_id = None;
         self.rpcuser = None;
         self.rpcpass = None;
         Ok(())
@@ -576,6 +582,8 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
+        let origin_id = self.extension_id.as_deref().unwrap_or(EXTENSION_ID);
+        req = req.header("Origin", format!("chrome-extension://{}/", origin_id));
 
         let _resp = req
             .send()
@@ -603,7 +611,8 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
-        req = req.header("Origin", format!("chrome-extension://{}/", EXTENSION_ID));
+        let origin_id = self.extension_id.as_deref().unwrap_or(EXTENSION_ID);
+        req = req.header("Origin", format!("chrome-extension://{}/", origin_id));
 
         match req.send().await {
             Ok(resp) => resp.status().is_success(),
@@ -648,7 +657,8 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
-        req = req.header("Origin", format!("chrome-extension://{}/", EXTENSION_ID));
+        let origin_id = self.extension_id.as_deref().unwrap_or(EXTENSION_ID);
+        req = req.header("Origin", format!("chrome-extension://{}/", origin_id));
 
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
@@ -689,6 +699,8 @@ concurrent_blob_downloads: 2
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
         }
+        let origin_id = self.extension_id.as_deref().unwrap_or(EXTENSION_ID);
+        req = req.header("Origin", format!("chrome-extension://{}/", origin_id));
 
         let resp = req.send().await.ok()?;
         if !resp.status().is_success() {
@@ -784,11 +796,12 @@ concurrent_blob_downloads: 2
             "params": {}
         });
 
-        // Browser extensions send an Origin header (e.g. "chrome-extension://...")
-        // lbrynet rejects with 403 unless allowed_origin matches (or "*").
+        // Use the configured allowed origin for the header (to match lbrynet's allowed_origin)
+        // or the dev token for testing if not set.
+        let origin = self.allowed_origin.as_deref().unwrap_or("chrome-extension://revivel-companion");
         let mut req = client
             .post(RPC_URL)
-            .header("Origin", "chrome-extension://revivel-companion")
+            .header("Origin", origin)
             .json(&body);
         if let (Some(u), Some(p)) = (&self.rpcuser, &self.rpcpass) {
             req = req.basic_auth(u, Some(p));
@@ -889,7 +902,7 @@ impl DaemonManager {
     /// Maintain daemon uptime: restart if process dead, RPC unreachable, or SPV disconnected for too long.
     /// Supports server rotation for SPV failover.
     /// Uses a grace period after start to avoid killing the daemon while it is still initializing SPV connection.
-    async fn maintain(&mut self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str) {
+    async fn maintain(&mut self, allow_extension: bool, servers: &[String], rpcuser: &str, rpcpass: &str, extension_id: &str) {
         if !self.should_be_running {
             return;
         }
@@ -910,7 +923,7 @@ impl DaemonManager {
             self.last_restart = Some(now);
             self.log_action("Daemon process not alive, auto-restarting...");
             self.recovery_history.push(format!("{}: process died", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
-            if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, "").await {
+            if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, extension_id).await {
                 self.log_action(&format!("Auto-start failed: {}", e));
             }
             return;
@@ -929,7 +942,7 @@ impl DaemonManager {
                 self.recovery_history.push(format!("{}: RPC unreachable", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
                 let _ = self.stop().await;
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, "").await {
+                if let Err(e) = self.start(allow_extension, servers, rpcuser, rpcpass, extension_id).await {
                     self.log_action(&format!("Restart after unreachable failed: {}", e));
                 }
             }
@@ -1704,7 +1717,7 @@ pub fn run() {
                             if gap > 30 {
                                 mgr.log_action(&format!("Long gap {}s detected (suspend/resume?), forcing health check", gap));
                             }
-                            mgr.maintain(allow, &servers, &rpcuser, &rpcpass).await;
+                            mgr.maintain(allow, &servers, &rpcuser, &rpcpass, &settings.revivel_extension_id).await;
                         }
                     }
                 }
