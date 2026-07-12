@@ -1,60 +1,91 @@
 #!/bin/bash
 set -e
 
-echo "=== ReviveL Companion - Compile All Platforms ==="
-echo "Version: $(grep '"version"' package.json | head -1)"
+echo "=== ReviveL Companion Complete Multi-Platform Compile ==="
+echo "Current version: $(node -p "require('./package.json').version")"
+echo "Date: $(date)"
 echo
 
-# Clean previous builds
-echo "Cleaning previous builds..."
-cargo clean -p revivel_companion_lib || true
-rm -rf src-tauri/target/release/bundle || true
+PROJECT_DIR=$(pwd)
+BUNDLE_DIR="src-tauri/target/release/bundle"
 
-# 1. Linux (native)
-echo "=== 1. Building Linux (native) ==="
-npm run tauri build
-echo "Linux bundles:"
-ls -l src-tauri/target/release/bundle/{deb,rpm,appimage}/* 2>/dev/null || echo "Check target/release/bundle/"
+# Function to clean
+clean() {
+  echo "Cleaning..."
+  cargo clean -p revivel_companion_lib 2>/dev/null || true
+  rm -rf "$BUNDLE_DIR" 2>/dev/null || true
+}
 
-# 2. Windows cross (using cargo-xwin)
-echo
-echo "=== 2. Building Windows (cross-compile) ==="
-echo "Using cargo-xwin for x86_64-pc-windows-msvc"
-cargo xwin build --target x86_64-pc-windows-msvc --release -p revivel_companion_lib || echo "Note: Binary build may require full setup"
-# For full bundle (may need additional tools like nsis/wix installed)
-npm run tauri build -- --target x86_64-pc-windows-msvc || echo "Full Windows bundle may need Windows env or extra tools"
-echo "Windows artifacts (if any):"
-ls -l src-tauri/target/x86_64-pc-windows-msvc/release/bundle/* 2>/dev/null || echo "No Windows bundle dir (cross bundling limited)"
+# 1. Linux native
+build_linux() {
+  echo "=== Building Linux (native) ==="
+  npm run tauri build
+  echo "Linux bundles:"
+  find "$BUNDLE_DIR" -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) | head -5 || echo "No Linux bundles found (may need full build)"
+}
+
+# 2. Windows cross
+build_windows() {
+  echo "=== Building Windows (cross from Linux) ==="
+  echo "Using cargo-xwin for MSVC target"
+  if command -v cargo-xwin &> /dev/null; then
+    cargo xwin build --target x86_64-pc-windows-msvc --release -p revivel_companion_lib || echo "Note: lib build may need xwin setup (run 'cargo xwin' first if fails)"
+  else
+    echo "cargo-xwin not found, installing..."
+    cargo install cargo-xwin --version 0.18.6
+    cargo xwin build --target x86_64-pc-windows-msvc --release -p revivel_companion_lib || true
+  fi
+  # Tauri bundle for Windows target (may produce exe, msi if tools available)
+  npm run tauri build -- --target x86_64-pc-windows-msvc || echo "Full Windows bundling limited in cross env - use CI or Windows machine for complete .msi/.exe"
+  echo "Windows artifacts (if produced):"
+  find src-tauri/target/x86_64-pc-windows-msvc -name "*.exe" -o -name "*.msi" 2>/dev/null | head -5 || echo "No Windows installer artifacts (binary may be in target)"
+}
 
 # 3. macOS cross
-echo
-echo "=== 3. Building macOS (cross-compile) ==="
-echo "Building for x86_64-apple-darwin and aarch64-apple-darwin"
-npm run tauri build -- --target x86_64-apple-darwin || echo "macOS x86 cross may have SDK limitations"
-npm run tauri build -- --target aarch64-apple-darwin || echo "macOS arm cross may have SDK limitations"
-# Universal
-npm run tauri build -- --target universal-apple-darwin || echo "Universal macOS may require proper SDK"
-echo "macOS artifacts (if any):"
-ls -l src-tauri/target/*/release/bundle/* 2>/dev/null | grep -E 'dmg|app' || echo "No macOS bundle (cross bundling limited without macOS env)"
+build_macos() {
+  echo "=== Building macOS (cross from Linux) ==="
+  echo "Note: Full .app/.dmg with signing requires macOS. Cross compile produces binary only."
+  for target in x86_64-apple-darwin aarch64-apple-darwin; do
+    echo "Building for $target..."
+    npm run tauri build -- --target $target || echo "Cross for $target limited (no full SDK/bundler)"
+  done
+  # Universal
+  npm run tauri build -- --target universal-apple-darwin || echo "Universal macOS cross limited"
+  echo "macOS artifacts (binaries only usually):"
+  find src-tauri/target -path '*/release/revivel-companion' -type f | grep -E 'darwin' | head -3 || echo "Check target for darwin binaries"
+}
 
 # 4. Linux via Docker (reproducible)
-echo
-echo "=== 4. Building Linux via Docker (reproducible) ==="
-if [ -f Dockerfile ]; then
-  docker build -t revivel-linux .
-  echo "Docker Linux image built."
-  # Extract if using export target
-  if docker build --target export -t revivel-linux-export . --output type=local,dest=./docker-linux-bundles 2>/dev/null; then
-    echo "Docker bundles exported to docker-linux-bundles/"
-    ls -l docker-linux-bundles/
+build_linux_docker() {
+  echo "=== Building Linux via Docker ==="
+  if [ -f Dockerfile ]; then
+    docker build -t revivel-linux .
+    echo "Docker image 'revivel-linux' built."
+    # Try export target if defined
+    mkdir -p docker-bundles/linux
+    if docker build --target export -t revivel-linux-export . --output type=local,dest=docker-bundles/linux 2>/dev/null; then
+      echo "Exported Linux bundles to docker-bundles/linux/"
+      ls docker-bundles/linux/
+    fi
+  else
+    echo "Dockerfile not found, skipping"
   fi
-else
-  echo "No Dockerfile found, skipping Docker Linux build"
-fi
+  if [ -f Dockerfile.windows-cross ]; then
+    echo "Building Windows cross Docker image..."
+    docker build -t revivel-win-cross -f Dockerfile.windows-cross .
+    echo "Windows cross Docker image built (run container to build inside)"
+  fi
+}
+
+# Main
+clean
+build_linux
+build_windows
+build_macos
+build_linux_docker
 
 echo
-echo "=== Compile All Done ==="
-echo "Check src-tauri/target/release/bundle/ for Linux"
-echo "Check src-tauri/target/x86_64-pc-windows-msvc/release/bundle/ for Windows (if successful)"
-echo "For full cross-platform packages, use GitHub Actions workflow (recommended)"
-echo "See BUILD.md for details"
+echo "=== All compiles attempted ==="
+echo "See BUILD.md and the GitHub workflow for recommended full CI builds on all platforms."
+echo "Linux packages should be in $BUNDLE_DIR/"
+echo "For complete Windows/macOS packages, trigger the GitHub Actions workflow."
