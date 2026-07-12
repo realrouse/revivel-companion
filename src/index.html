@@ -78,9 +78,9 @@
             <input type="checkbox" id="allow-extension" /> Allow ReviveL browser extension access (uses the Extension ID above for --allowed-origin + Native Messaging)
           </label>
           <div>
-            <label class="small">ReviveL Extension ID (for custom/unpacked dev builds only):</label><br/>
-            <input type="text" id="extension-id" value="mphijnbejfkmcahhjlchcghmjegoefkf" style="width: 100%; font-family: monospace; font-size: 12px;" />
-            <button id="use-stable-id" style="margin-top:4px; font-size:11px;">Use stable official ID (recommended for .zip / .crx downloads)</button>
+            <label class="small">ReviveL Extension ID:</label><br/>
+            <input type="text" id="extension-id" style="width: 70%; font-family: monospace; font-size: 12px;" />
+            <button id="btn-save-ext-id" style="margin-top:4px; font-size:11px;">Save Extension ID</button>
             <button id="btn-reset-ext-id" style="margin-top:4px; font-size:11px; background:#552;">Reset Extension ID</button>
           </div>
           <div>
@@ -142,14 +142,9 @@
           <li>Click the ID (copy it)</li>
           <li>Paste below</li>
         </ol>
-        <p class="small">
-          <strong>For official published .crx / store version:</strong> use the stable ID (pre-filled):
-          <code>mphijnbejfkmcahhjlchcghmjegoefkf</code>
-        </p>
         <input type="text" id="setup-ext-id" placeholder="Paste extension ID here" style="width:100%; font-family:monospace; font-size:12px; padding:6px;" />
         <div style="margin-top:12px;">
           <button id="btn-save-setup-id">Save Extension ID & Continue</button>
-          <button id="btn-use-stable-setup" style="background:#333; margin-left:8px;">Use stable official ID</button>
         </div>
         <p class="small" style="margin-top:12px; color:#888;">
           You can change or reset this later in the Settings tab.

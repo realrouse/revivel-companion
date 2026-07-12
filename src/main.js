@@ -274,17 +274,9 @@ async function loadSettings() {
     }
     // Extension ID (for lbry:// forwarding) - shown for advanced users
     const extIdEl = document.getElementById('extension-id');
-    const stableId = 'mphijnbejfkmcahhjlchcghmjegoefkf';
     if (extIdEl) {
       const currentId = cfg.revivel_extension_id || '';
-      if (currentId === '') {
-        // No ID set yet -> will be handled by setup modal after load
-        extIdEl.value = stableId;
-      } else if (currentId === stableId) {
-        extIdEl.value = stableId;
-      } else {
-        extIdEl.value = currentId;
-      }
+      extIdEl.value = currentId;  // show exactly what is set (empty if not configured)
     }
     const spvEl = document.getElementById('spv-servers');
     if (spvEl && cfg.spv_servers) {
@@ -297,9 +289,9 @@ function showSetupModal() {
   const modal = document.getElementById('setup-modal');
   const input = document.getElementById('setup-ext-id');
   if (modal && input) {
-    // Prefill with current value or stable
+    // Do not prefill with stable; user pastes the ID from their extension
     const current = document.getElementById('extension-id') ? document.getElementById('extension-id').value : '';
-    input.value = current || 'mphijnbejfkmcahhjlchcghmjegoefkf';
+    input.value = current || '';
     modal.style.display = 'flex';
   }
 }
@@ -314,7 +306,7 @@ async function saveExtensionIdFromSetup() {
   if (!input) return;
   const newId = input.value.trim();
   if (!newId) {
-    alert('Please enter a valid Extension ID (or use the stable one).');
+    alert('Please enter a valid Extension ID.');
     return;
   }
   // Update the settings field
@@ -323,9 +315,51 @@ async function saveExtensionIdFromSetup() {
 
   // Save settings (this will also reinstall NM manifest)
   await saveSettings();
+
+  // If daemon is running, restart it so the new ID is used for allowed_origin in config
+  try {
+    const status = await invoke('get_status');
+    if (status && status.running) {
+      await invoke('restart_daemon');
+      // wait a bit for restart
+      await new Promise(r => setTimeout(r, 800));
+      await refreshStatus();
+    }
+  } catch (e) {
+    console.warn('Could not restart daemon after ID save:', e);
+  }
+
   hideSetupModal();
   // Refresh to apply
   await refreshStatus();
+}
+
+async function saveExtensionId() {
+  const extIdEl = document.getElementById('extension-id');
+  if (!extIdEl) return;
+  const newId = extIdEl.value.trim();
+  if (!newId) {
+    alert('Please enter a valid Extension ID.');
+    return;
+  }
+  await saveSettings();
+  // Reinstall manifest explicitly
+  try {
+    await invoke('install_native_messaging_manifest');
+  } catch (e) { console.warn(e); }
+
+  // Restart daemon if running to update allowed_origin
+  try {
+    const status = await invoke('get_status');
+    if (status && status.running) {
+      await invoke('restart_daemon');
+      await new Promise(r => setTimeout(r, 800));
+      await refreshStatus();
+    }
+  } catch (e) {
+    console.warn('Could not restart after ID save:', e);
+  }
+  alert('Extension ID saved.');
 }
 
 async function saveSettings() {
@@ -425,18 +459,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (allowExtEl) allowExtEl.addEventListener('change', saveSettings);
 
   const extIdEl = document.getElementById('extension-id');
-  if (extIdEl) {
-    extIdEl.addEventListener('change', saveSettings);
-    extIdEl.addEventListener('blur', saveSettings);
-  }
-
-  const useStableBtn = document.getElementById('use-stable-id');
-  if (useStableBtn && extIdEl) {
-    useStableBtn.addEventListener('click', () => {
-      extIdEl.value = 'mphijnbejfkmcahhjlchcghmjegoefkf';
-      saveSettings();
-    });
-  }
+  // Note: ID field no longer auto-saves on change/blur; use the Save button
   const spvEl = document.getElementById('spv-servers');
   if (spvEl) {
     spvEl.addEventListener('change', saveSettings);
@@ -544,15 +567,16 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  const useStableSetupBtn = document.getElementById('btn-use-stable-setup');
-  if (useStableSetupBtn) {
-    useStableSetupBtn.addEventListener('click', () => {
-      const input = document.getElementById('setup-ext-id');
-      if (input) input.value = 'mphijnbejfkmcahhjlchcghmjegoefkf';
+  // (stable ID button removed - stable is always allowed via KNOWN list)
+
+  // Reset Extension ID button (in Settings)
+  const saveExtIdBtn = document.getElementById('btn-save-ext-id');
+  if (saveExtIdBtn) {
+    saveExtIdBtn.addEventListener('click', async () => {
+      await saveExtensionId();
     });
   }
 
-  // Reset Extension ID button (in Settings)
   const resetExtIdBtn = document.getElementById('btn-reset-ext-id');
   if (resetExtIdBtn) {
     resetExtIdBtn.addEventListener('click', async () => {

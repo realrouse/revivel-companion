@@ -1537,12 +1537,11 @@ fn open_url_in_browser(url: &str) -> std::io::Result<()> {
 // - player.html URLs
 const EXTENSION_ID: &str = "mphijnbejfkmcahhjlchcghmjegoefkf";
 
-// Stable IDs that are allowed to use the Companion via Native Messaging and lbrynet.
+// Hardcoded stable ID (decided by dev for published builds) is always allowed,
+// in addition to whatever ID the user configures for their (possibly unpacked) extension.
 const KNOWN_EXTENSION_IDS: &[&str] = &[
-    "mphijnbejfkmcahhjlchcghmjegoefkf", // current stable .crx build
-    "bgehhgganagafhmkbpgiockhfpgbhebk", // previous published (transition)
+    "mphijnbejfkmcahhjlchcghmjegoefkf", // stable .crx / published ID (always allowed)
     "revivel-companion",                // dev token
-    "cjbnapmoeofopcfhobehilnffciednff", // dev/unpacked used in testing
 ];
 
 fn handle_lbry_url(app: &tauri::AppHandle, args: Vec<String>, extension_id: &str) {
