@@ -1,6 +1,6 @@
 [package]
 name = "revivel-companion"
-version = "0.1.5-hotfix1"
+version = "0.2.0"
 description = "ReviveL Companion - lbrynet daemon launcher and SPV wallet manager for the ReviveL browser extension"
 authors = ["ReviveL"]
 edition = "2021"
@@ -33,4 +33,5 @@ rand = "0.8"
 tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
 urlencoding = "2.1.3"
+base64 = "0.21"
 

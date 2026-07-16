@@ -1,11 +1,15 @@
 // ReviveL Companion - lbrynet daemon manager (SPV wallet)
 // Provides reliable local daemon at 127.0.0.1:5279 for the browser extension.
 
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use base64::{engine::general_purpose, Engine as _};
 
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -1426,6 +1430,7 @@ pub fn run_as_native_messaging_host() {
 
 fn handle_native_message(msg: serde_json::Value) -> serde_json::Value {
     if let Some(typ) = msg.get("type").and_then(|v| v.as_str()) {
+        eprintln!("[native host] received type: {}", typ);
         match typ {
             "open-lbry-uri" => {
                 if let Some(uri) = msg.get("uri").and_then(|v| v.as_str()) {
@@ -1509,6 +1514,38 @@ fn handle_native_message(msg: serde_json::Value) -> serde_json::Value {
             }
             "ping" => {
                 return serde_json::json!({ "success": true, "pong": true });
+            }
+            "begin_stage_file" => {
+                let filename = msg.get("filename").and_then(|v| v.as_str()).unwrap_or("upload.bin");
+                eprintln!("[native host] received begin_stage_file: {}", filename);
+                let temp_dir = std::env::temp_dir().join("revivel_uploads");
+                let _ = fs::create_dir_all(&temp_dir);
+                let safe_name: String = filename.chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' }).collect();
+                let path = temp_dir.join(format!("upload_{}_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(), safe_name));
+                let _ = File::create(&path);
+                eprintln!("[native host] created staging path: {}", path.display());
+                return serde_json::json!({ "success": true, "path": path.to_string_lossy() });
+            }
+            "append_file_chunk" => {
+                let path = msg.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                eprintln!("[native host] received append_file_chunk for path: {}", path);
+                let chunk_b64 = msg.get("chunk").and_then(|v| v.as_str()).unwrap_or("");
+                let data = general_purpose::STANDARD.decode(chunk_b64).unwrap_or_default();
+                if !path.is_empty() {
+                    if let Ok(mut f) = OpenOptions::new().append(true).open(&path) {
+                        let _ = f.write_all(&data);
+                    }
+                }
+                return serde_json::json!({ "success": true });
+            }
+            "finish_stage_file" => {
+                let path = msg.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                eprintln!("[native host] received finish_stage_file for path: {}", path);
+                // No need to remove anything; path is sent by client
+                if !path.is_empty() {
+                    return serde_json::json!({ "success": true, "path": path });
+                }
+                return serde_json::json!({ "success": false, "error": "no path provided" });
             }
             _ => {}
         }

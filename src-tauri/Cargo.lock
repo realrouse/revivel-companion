@@ -3164,9 +3164,10 @@ dependencies = [
 
 [[package]]
 name = "revivel-companion"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "auto-launch",
+ "base64 0.21.7",
  "dirs 5.0.1",
  "once_cell",
  "rand 0.8.6",
